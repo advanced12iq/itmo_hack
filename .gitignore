@@ -1,0 +1,7 @@
+/data/
+/artifacts/
+/submission*.csv
+/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
