@@ -1,12 +1,31 @@
 import sqlite3
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from .data import Scene, windows
+from .lexical import build_lexical, lexical_hits
 
 EMBEDDER = "intfloat/multilingual-e5-small"
 BATCH_SIZE = 64
+
+
+@dataclass
+class Candidate:
+    id: int
+    scene: Scene
+    similarity: float = 0.0
+    dense_rank: int = 0
+    word_rank: int = 0
+
+    @property
+    def fused_score(self):
+        return sum(
+            weight / (60 + rank)
+            for rank, weight in ((self.dense_rank, 1.0), (self.word_rank, 0.65))
+            if rank
+        )
 
 
 class DenseEncoder:
@@ -69,6 +88,7 @@ def build(data, output):
             rows = db.execute("SELECT text FROM scenes ORDER BY id")
             while batch := rows.fetchmany(BATCH_SIZE):
                 index.add(encoder.encode([text for (text,) in batch], "passage"))
+            build_lexical(db)
             db.commit()
         encoder.save(index, snapshot / "dense.faiss")
         snapshot.rename(output)
@@ -88,14 +108,31 @@ class Search:
     def close(self):
         self.db.close()
 
-    def top(self, question):
-        if not question.strip():
+    def candidates(self, question):
+        question = question.strip()
+        if not question:
             return []
         vector = self.encoder.encode([question], "query")
-        _, positions = self.index.search(vector, min(5, self.index.ntotal))
-        return [
-            Scene(*self.db.execute(
-                "SELECT video, start, end, text FROM scenes WHERE id = ?", (position + 1,)
-            ).fetchone())
-            for position in positions[0].tolist() if position >= 0
+        scores, positions = self.index.search(vector, min(50, self.index.ntotal))
+        dense = {
+            position + 1: (score, rank)
+            for rank, (score, position) in enumerate(zip(scores[0].tolist(), positions[0].tolist()), 1)
+            if position >= 0
+        }
+        lexical = {rowid: rank for rank, rowid in enumerate(lexical_hits(self.db, question), 1)}
+        ids = list(dense.keys() | lexical.keys())
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.db.execute(
+            f"SELECT id, video, start, end, text FROM scenes WHERE id IN ({placeholders})", ids
+        )
+        candidates = [
+            Candidate(rowid, Scene(video, start, end, text), *dense.get(rowid, (0.0, 0)),
+                      lexical.get(rowid, 0))
+            for rowid, video, start, end, text in rows
         ]
+        return sorted(candidates, key=lambda candidate: (-candidate.fused_score, candidate.id))
+
+    def top(self, question):
+        return [candidate.scene for candidate in self.candidates(question)[:5]]
