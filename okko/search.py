@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from .data import Scene, windows
 from .lexical import build_lexical, lexical_hits
+from .rerank import LinearRanker
 
 EMBEDDER = "intfloat/multilingual-e5-small"
 BATCH_SIZE = 64
@@ -106,6 +107,8 @@ class Search:
             raise FileNotFoundError(f"{directory}: build the search index first")
         self.encoder = DenseEncoder()
         self.index = self.encoder.load(index_file)
+        self.ranker_path = directory / "ranker.json"
+        self.ranker = LinearRanker.load(self.ranker_path)
         self.db = sqlite3.connect(database)
 
     def close(self):
@@ -140,4 +143,7 @@ class Search:
         return sorted(candidates, key=lambda candidate: (-candidate.fused_score, candidate.id))
 
     def top(self, question):
-        return [candidate.scene for candidate in self.candidates(question)[:5]]
+        candidates = self.candidates(question)
+        if self.ranker:
+            candidates.sort(key=self.ranker.score, reverse=True)
+        return [candidate.scene for candidate in candidates[:5]]

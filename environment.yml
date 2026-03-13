@@ -8,6 +8,7 @@ dependencies:
   - pytorch=2.5.1
   - pytorch-cuda=12.1
   - faiss-gpu=1.13.2
+  - scikit-learn>=1.5,<2
   - pip
   - pip:
       - sentence-transformers>=3.4,<6
