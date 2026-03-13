@@ -81,21 +81,23 @@ def transcript_segments(data):
 
 def windows(data):
     for video, segments in transcript_segments(data):
-        left = 0
-        duration = max(segment.end for segment in segments)
-        for start in range(0, math.ceil(duration), 25):
-            end = min(start + 30, duration)
-            while left < len(segments) and segments[left].end <= start:
-                left += 1
-            parts = []
-            for index in range(left, len(segments)):
-                segment = segments[index]
-                if segment.start >= end:
-                    break
-                if segment.end > start:
+        next_anchor = 0.0
+        for index, first in enumerate(segments):
+            if first.start < next_anchor:
+                continue
+            next_anchor = first.start + 6
+            for duration in (12, 24, 48):
+                end = first.end
+                parts = [first.text]
+                cursor = index + 1
+                while cursor < len(segments):
+                    segment = segments[cursor]
+                    if segment.start >= first.start + duration or segment.start > end + 8:
+                        break
+                    end = max(end, segment.end)
                     parts.append(segment.text)
-            if parts:
-                yield Scene(video, start, end, " ".join(parts))
+                    cursor += 1
+                yield Scene(video, first.start, end, " ".join(parts))
 
 
 def write_submission(data, output, search):
