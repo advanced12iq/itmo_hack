@@ -18,12 +18,15 @@ class Candidate:
     similarity: float = 0.0
     dense_rank: int = 0
     word_rank: int = 0
+    trigram_rank: int = 0
 
     @property
     def fused_score(self):
         return sum(
             weight / (60 + rank)
-            for rank, weight in ((self.dense_rank, 1.0), (self.word_rank, 0.65))
+            for rank, weight in (
+                (self.dense_rank, 1.0), (self.word_rank, 0.65), (self.trigram_rank, 0.45)
+            )
             if rank
         )
 
@@ -119,8 +122,10 @@ class Search:
             for rank, (score, position) in enumerate(zip(scores[0].tolist(), positions[0].tolist()), 1)
             if position >= 0
         }
-        lexical = {rowid: rank for rank, rowid in enumerate(lexical_hits(self.db, question), 1)}
-        ids = list(dense.keys() | lexical.keys())
+        word_hits, trigram_hits = lexical_hits(self.db, question)
+        word_ranks = {rowid: rank for rank, rowid in enumerate(word_hits, 1)}
+        trigram_ranks = {rowid: rank for rank, rowid in enumerate(trigram_hits, 1)}
+        ids = list(dense.keys() | word_ranks.keys() | trigram_ranks.keys())
         if not ids:
             return []
         placeholders = ",".join("?" for _ in ids)
@@ -129,7 +134,7 @@ class Search:
         )
         candidates = [
             Candidate(rowid, Scene(video, start, end, text), *dense.get(rowid, (0.0, 0)),
-                      lexical.get(rowid, 0))
+                      word_ranks.get(rowid, 0), trigram_ranks.get(rowid, 0))
             for rowid, video, start, end, text in rows
         ]
         return sorted(candidates, key=lambda candidate: (-candidate.fused_score, candidate.id))
