@@ -11,13 +11,14 @@ def features(candidate):
     def reciprocal(rank):
         return 1.0 / rank if rank else 0.0
 
-    return (
+    base = (
         candidate.similarity,
         reciprocal(candidate.dense_rank),
         reciprocal(candidate.word_rank),
         reciprocal(candidate.trigram_rank),
         math.log1p(candidate.scene.end - candidate.scene.start),
     )
+    return base if candidate.cross_logit is None else (*base, candidate.cross_logit)
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,7 @@ def train(data, search, output):
     rows = [
         pair
         for question in questions(data, validation=False)
-        for pair in training_rows(search.candidates(question.text), question.references)
+        for pair in training_rows(search.ranking_pool(question.text)[0], question.references)
     ]
     if not rows:
         raise ValueError("No training questions had both a retrieved positive and a hard negative")

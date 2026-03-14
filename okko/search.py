@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from .cross import CROSS_LIMIT, CrossEncoder
 from .data import Scene, windows
 from .lexical import build_lexical, lexical_hits
 from .rerank import LinearRanker
@@ -20,6 +21,7 @@ class Candidate:
     dense_rank: int = 0
     word_rank: int = 0
     trigram_rank: int = 0
+    cross_logit: float | None = None
 
     @property
     def fused_score(self):
@@ -100,14 +102,15 @@ def build(data, output):
 
 
 class Search:
-    def __init__(self, directory):
+    def __init__(self, directory, *, cross=True):
         index_file = directory / "dense.faiss"
         database = directory / "scenes.sqlite"
         if not index_file.is_file() or not database.is_file():
             raise FileNotFoundError(f"{directory}: build the search index first")
         self.encoder = DenseEncoder()
         self.index = self.encoder.load(index_file)
-        self.ranker_path = directory / "ranker.json"
+        self.cross = CrossEncoder() if cross else None
+        self.ranker_path = directory / ("ranker-cross.json" if cross else "ranker.json")
         self.ranker = LinearRanker.load(self.ranker_path)
         self.db = sqlite3.connect(database)
 
@@ -142,8 +145,27 @@ class Search:
         ]
         return sorted(candidates, key=lambda candidate: (-candidate.fused_score, candidate.id))
 
-    def top(self, question):
+    def ranking_pool(self, question):
         candidates = self.candidates(question)
+        if not self.cross or not candidates:
+            return candidates, []
+        shortlist, reserve = candidates[:CROSS_LIMIT], candidates[CROSS_LIMIT:]
+        for candidate, score in zip(shortlist, self.cross.score(question, shortlist), strict=True):
+            candidate.cross_logit = score
+        return shortlist, reserve
+
+    def top(self, question):
+        shortlist, reserve = self.ranking_pool(question)
         if self.ranker:
-            candidates.sort(key=self.ranker.score, reverse=True)
-        return [candidate.scene for candidate in candidates[:5]]
+            shortlist.sort(key=self.ranker.score, reverse=True)
+        elif self.cross:
+            cross_order = sorted(shortlist, key=lambda candidate: candidate.cross_logit, reverse=True)
+            rerank_scores = {
+                candidate.id: 1.25 / (60 + rank)
+                for rank, candidate in enumerate(cross_order, 1)
+            }
+            shortlist.sort(
+                key=lambda candidate: candidate.fused_score + rerank_scores[candidate.id],
+                reverse=True,
+            )
+        return [candidate.scene for candidate in (shortlist + reserve)[:5]]
