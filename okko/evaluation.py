@@ -1,6 +1,7 @@
 import hashlib
 import math
 from dataclasses import dataclass
+from time import perf_counter_ns
 
 from .data import Scene, name, read_rows
 
@@ -79,4 +80,18 @@ def metrics(examples):
 
 def evaluate(data, search):
     validation = questions(data, validation=True)
-    return metrics((search(question.text), question.references) for question in validation)
+    for question in validation[:10]:
+        search(question.text)
+
+    latencies = []
+
+    def timed_results():
+        for question in validation:
+            start = perf_counter_ns()
+            predicted = search(question.text)
+            latencies.append((perf_counter_ns() - start) / 1_000_000)
+            yield predicted, question.references
+
+    results = metrics(timed_results())
+    results["p95_latency_ms"] = round(sorted(latencies)[math.ceil(0.95 * len(latencies)) - 1], 2)
+    return results

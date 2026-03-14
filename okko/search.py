@@ -63,7 +63,10 @@ class DenseEncoder:
 
         self.faiss = faiss
         self.resources = faiss.StandardGpuResources()
-        self.model = SentenceTransformer(EMBEDDER, device="cuda:0")
+        self.resources.setTempMemory(256 * 1024 * 1024)
+        self.model = SentenceTransformer(
+            EMBEDDER, device="cuda:0", model_kwargs={"use_safetensors": True},
+        )
         self.model.max_seq_length = 256
 
     def encode(self, texts, prefix):

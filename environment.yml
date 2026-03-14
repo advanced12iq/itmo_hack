@@ -5,11 +5,11 @@ channels:
   - conda-forge
 dependencies:
   - python=3.11
-  - pytorch=2.5.1
+  - pytorch=2.5.1=*cuda12.1*
   - pytorch-cuda=12.1
   - faiss-gpu=1.13.2
   - scikit-learn>=1.5,<2
   - pip
   - pip:
-      - sentence-transformers>=3.4,<6
-      - transformers>=4.48,<5
+      - sentence-transformers>=3.4,<5
+      - transformers>=4.48,<4.52

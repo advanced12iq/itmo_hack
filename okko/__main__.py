@@ -19,6 +19,8 @@ def main():
         command.add_argument("--index", type=Path, default=Path("artifacts"))
         if name == "index":
             command.add_argument("--backend", choices=("auto", "flat", "ivf"), default="auto")
+        else:
+            command.add_argument("--no-cross-encoder", action="store_true")
         if name == "predict":
             command.add_argument("--out", type=Path, default=Path("submission.csv"))
     args = parser.parse_args()
@@ -28,7 +30,7 @@ def main():
             count = build(args.data, args.index, args.backend)
             print(f"Indexed {count} scenes in {args.index}")
         else:
-            with closing(Search(args.index)) as search:
+            with closing(Search(args.index, cross=not args.no_cross_encoder)) as search:
                 if args.command == "train-reranker":
                     count = train(args.data, search, search.ranker_path)
                     print(f"Trained on {count} candidate pairs, saved {search.ranker_path}")
@@ -36,7 +38,7 @@ def main():
                     print(json.dumps(evaluate(args.data, search.top), indent=2))
                 else:
                     write_submission(args.data, args.out, search.top)
-    except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
+    except (OSError, RuntimeError, ValueError, ImportError, sqlite3.Error) as error:
         parser.exit(1, f"okko: {error}\n")
 
 
