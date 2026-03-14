@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from .cross import CROSS_LIMIT, CrossEncoder
 from .data import Scene, windows
+from .evaluation import iou
 from .lexical import build_lexical, lexical_hits
 from .rerank import LinearRanker
 
@@ -32,6 +33,17 @@ class Candidate:
             )
             if rank
         )
+
+
+def diverse(candidates, threshold, limit):
+    selected = []
+    for candidate in candidates:
+        if any(iou(candidate.scene, other.scene) >= threshold for other in selected):
+            continue
+        selected.append(candidate)
+        if len(selected) == limit:
+            break
+    return selected
 
 
 class DenseEncoder:
@@ -149,7 +161,9 @@ class Search:
         candidates = self.candidates(question)
         if not self.cross or not candidates:
             return candidates, []
-        shortlist, reserve = candidates[:CROSS_LIMIT], candidates[CROSS_LIMIT:]
+        shortlist = diverse(candidates, threshold=0.85, limit=CROSS_LIMIT)
+        shortlisted = {candidate.id for candidate in shortlist}
+        reserve = [candidate for candidate in candidates if candidate.id not in shortlisted]
         for candidate, score in zip(shortlist, self.cross.score(question, shortlist), strict=True):
             candidate.cross_logit = score
         return shortlist, reserve
@@ -168,4 +182,4 @@ class Search:
                 key=lambda candidate: candidate.fused_score + rerank_scores[candidate.id],
                 reverse=True,
             )
-        return [candidate.scene for candidate in (shortlist + reserve)[:5]]
+        return [candidate.scene for candidate in diverse(shortlist + reserve, threshold=0.7, limit=5)]
