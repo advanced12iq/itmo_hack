@@ -1,3 +1,4 @@
+import math
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from .rerank import LinearRanker
 
 EMBEDDER = "intfloat/multilingual-e5-small"
 BATCH_SIZE = 64
+IVF_MIN_WINDOWS = 50_000
+IVF_LISTS = 256
+IVF_PROBES = 16
+IVF_TRAIN_WINDOWS = 30_000
 
 
 @dataclass
@@ -70,12 +75,20 @@ class DenseEncoder:
             show_progress_bar=False,
         ).float().contiguous()
 
-    def new_index(self):
+    def new_index(self, backend):
         dimension = self.model.get_sentence_embedding_dimension()
-        return self.to_gpu(self.faiss.IndexFlatIP(dimension))
+        index = self.faiss.IndexFlatIP(dimension)
+        if backend == "ivf":
+            index = self.faiss.IndexIVFFlat(
+                index, dimension, IVF_LISTS, self.faiss.METRIC_INNER_PRODUCT,
+            )
+        return self.to_gpu(index)
 
     def to_gpu(self, index):
-        return self.faiss.index_cpu_to_gpu(self.resources, 0, index)
+        gpu_index = self.faiss.index_cpu_to_gpu(self.resources, 0, index)
+        if isinstance(index, self.faiss.IndexIVF):
+            self.faiss.GpuParameterSpace().set_index_parameter(gpu_index, "nprobe", IVF_PROBES)
+        return gpu_index
 
     def save(self, index, path):
         self.faiss.write_index(self.faiss.index_gpu_to_cpu(index), str(path))
@@ -84,7 +97,7 @@ class DenseEncoder:
         return self.to_gpu(self.faiss.read_index(str(path)))
 
 
-def build(data, output):
+def build(data, output, backend="auto"):
     if output.exists():
         raise FileExistsError(f"{output} already exists. Choose a new index directory.")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -99,10 +112,23 @@ def build(data, output):
                 "INSERT OR IGNORE INTO scenes(video, start, end, text) VALUES (?, ?, ?, ?)",
                 ((scene.video, scene.start, scene.end, scene.text) for scene in windows(data)),
             )
-            count = db.execute("SELECT COUNT(*) FROM scenes").fetchone()[0]
+            count, last_id = db.execute("SELECT COUNT(*), MAX(id) FROM scenes").fetchone()
             if not count:
                 raise ValueError("No transcript windows matched video_files.csv")
-            index = encoder.new_index()
+            if last_id != count:
+                raise RuntimeError("Scene IDs must be consecutive for FAISS lookup")
+            if backend == "auto":
+                backend = "ivf" if count >= IVF_MIN_WINDOWS else "flat"
+            if backend == "ivf" and count < IVF_MIN_WINDOWS:
+                raise ValueError(f"IVF requires at least {IVF_MIN_WINDOWS:,} windows. Use --backend flat.")
+            index = encoder.new_index(backend)
+            if backend == "ivf":
+                stride = math.ceil(count / IVF_TRAIN_WINDOWS)
+                training = db.execute(
+                    "SELECT text FROM scenes WHERE (id - 1) % ? = 0 ORDER BY id",
+                    (stride,),
+                )
+                index.train(encoder.encode([text for (text,) in training], "passage"))
             rows = db.execute("SELECT text FROM scenes ORDER BY id")
             while batch := rows.fetchmany(BATCH_SIZE):
                 index.add(encoder.encode([text for (text,) in batch], "passage"))

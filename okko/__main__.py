@@ -17,13 +17,15 @@ def main():
         command = subcommands.add_parser(name)
         command.add_argument("--data", type=Path, default=Path("data"))
         command.add_argument("--index", type=Path, default=Path("artifacts"))
+        if name == "index":
+            command.add_argument("--backend", choices=("auto", "flat", "ivf"), default="auto")
         if name == "predict":
             command.add_argument("--out", type=Path, default=Path("submission.csv"))
     args = parser.parse_args()
 
     try:
         if args.command == "index":
-            count = build(args.data, args.index)
+            count = build(args.data, args.index, args.backend)
             print(f"Indexed {count} scenes in {args.index}")
         else:
             with closing(Search(args.index)) as search:
